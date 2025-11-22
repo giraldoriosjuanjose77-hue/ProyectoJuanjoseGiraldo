@@ -359,7 +359,7 @@ def voice_bokeh_button(event_name: str, comp_id: str, label: str = "Iniciar reco
 # -----------------------
 # Sidebar & Main UI
 # -----------------------
-st.title("Control Luces")
+st.title("Control Casa Inteligente")
 
 # Inicializa y procesa cola MQTT inmediatamente
 client = get_mqtt_client()
@@ -388,7 +388,7 @@ page = st.sidebar.selectbox("Páginas", ["Luz", "Sensores", "Seguridad"])
 
 # --- PÁGINA LUZ ---
 if page == "Luz":
-    st.header("Control de luz (voz)")
+    st.header("Control de luz")
     st.write("Usa el botón o el reconocimiento por voz. Di 'Encender' o 'Apagar'.")
 
     col1, col2 = st.columns([1, 3])
@@ -466,7 +466,7 @@ if page == "Luz":
 
 # --- PÁGINA SENSORES ---
 elif page == "Sensores":
-    st.header("Temperatura y Humedad (DHT22)")
+    st.header("Temperatura y Humedad del cuarto")
     st.write("Gráficas en tiempo real (últimos valores recibidos).")
 
     # Safe auto-refresh: only when tab visible, every 2s
@@ -520,15 +520,15 @@ elif page == "Sensores":
 
     # --- BOTÓN DEL SERVO (RESTAURADO) ---
     st.write("---")
-    st.write("Control manual del servo desde esta página (al activarlo, moverá el servo a 90°).")
-    if st.button("Activar servo (90°)"):
+    st.write("Control de la Ventilación")
+    if st.button("Activar Ventilación"):
         publish_servo_cmd(client, 90)
         st.success("Comando servo enviado: 90°")
 
 # --- PÁGINA SEGURIDAD ---
 elif page == "Seguridad":
-    st.header("Seguridad / PIR")
-    st.write("Cuando el sensor PIR se active (evento 'motion'), esta página cambiará a 'Intruso detectado' automáticamente.")
+    st.header("Control de seguridad")
+    st.write("Si se detecta un Intruso active el comando de voz para cerrar la puerta de seguridad")
 
     # Safe auto-refresh in security: only when tab visible, every 2s
     result_refresh_sec = html(
