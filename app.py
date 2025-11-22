@@ -26,12 +26,19 @@ def get_mqtt_client():
         st.session_state.setdefault("security", "No se han detectado intrusos")
         # para depuración: último payload RAW recibido en /lights/state
         st.session_state.setdefault("last_lights_state_raw", None)
+        # último timestamp (ms) de evento PIR 'motion'
+        st.session_state.setdefault("last_motion_ts", None)
     return st.session_state["mqtt_client"]
 
 # -----------------------
 # Consumo robusto de la cola MQTT
 # -----------------------
 def mqtt_message_consumer():
+    """
+    Procesa todos los mensajes en la cola MQTT (st.session_state['mqtt_queue'])
+    y actualiza st.session_state con temps, hums, light_state, security, etc.
+    Es tolerante a tuplas (topic, parsed), (topic, parsed, raw) y otros formatos.
+    """
     q = st.session_state.get("mqtt_queue")
     if not q:
         return
@@ -40,19 +47,38 @@ def mqtt_message_consumer():
         while True:
             item = q.get_nowait()
             # Soportar tanto 2-tuplas (topic, parsed) como 3-tuplas (topic, parsed, raw)
-            if isinstance(item, tuple) and len(item) == 3:
-                topic, parsed, raw = item
-            elif isinstance(item, tuple) and len(item) == 2:
-                topic, parsed = item
-                raw = None
-            else:
-                # intentar extraer de forma segura
-                try:
-                    topic = item[0]
-                    parsed = item[1] if len(item) > 1 else None
-                    raw = item[2] if len(item) > 2 else None
-                except Exception:
-                    continue
+            topic = None
+            parsed = None
+            raw = None
+            try:
+                if isinstance(item, tuple):
+                    if len(item) == 3:
+                        topic, parsed, raw = item
+                    elif len(item) == 2:
+                        topic, parsed = item
+                        raw = None
+                    elif len(item) >= 1:
+                        topic = item[0]
+                        parsed = item[1] if len(item) > 1 else None
+                        raw = item[2] if len(item) > 2 else None
+                elif isinstance(item, dict):
+                    # fallback: attempt to extract keys
+                    topic = item.get("topic")
+                    parsed = item.get("parsed")
+                    raw = item.get("raw")
+                else:
+                    # unknown format, try to index
+                    try:
+                        topic = item[0]
+                        parsed = item[1] if len(item) > 1 else None
+                        raw = item[2] if len(item) > 2 else None
+                    except Exception:
+                        continue
+            except Exception:
+                continue
+
+            if not topic:
+                continue
 
             # Para depuración, si el topic es lights/state almacenamos el raw
             if topic.endswith("/lights/state"):
@@ -93,7 +119,7 @@ def mqtt_message_consumer():
                 # Telemetría DHT22: t/h
                 if isinstance(parsed, dict):
                     ts = parsed.get("ts", int(time.time()*1000))
-                    data = parsed.get("data", {})
+                    data = parsed.get("data", {}) or {}
                     t = data.get("temp")
                     h = data.get("hum")
                     # tolerancia a formatos distintos
@@ -119,7 +145,7 @@ def mqtt_message_consumer():
                     if raw:
                         try:
                             tmp = json.loads(raw)
-                            data = tmp.get("data", {})
+                            data = tmp.get("data", {}) or {}
                             t = data.get("temp")
                             h = data.get("hum")
                             ts = tmp.get("ts", int(time.time()*1000))
@@ -152,9 +178,12 @@ def mqtt_message_consumer():
                     got_motion = True
                 if got_motion:
                     st.session_state["security"] = "Intruso detectado"
+                    # almacenar la hora del último evento motion en milisegundos
+                    st.session_state["last_motion_ts"] = int(time.time() * 1000)
                     updated = True
 
             elif topic.endswith("/servo/state"):
+                # opcional: manejar confirmaciones del servo si necesitas
                 pass
 
     except Empty:
@@ -184,7 +213,7 @@ def publish_servo_cmd(client, angle: int):
     client.publish_json(TOPIC_SERVO_CMD, payload)
 
 # -----------------------
-# Voice (Bokeh) helper - RESTAURADO tal como antes
+# Voice (Bokeh) helper - RESTAURADO
 # -----------------------
 def voice_bokeh_button(event_name: str, comp_id: str, label: str = "Iniciar reconocimiento"):
     js = f"""
@@ -372,7 +401,7 @@ elif page == "Sensores":
     st.header("Temperatura y Humedad (DHT22)")
     st.write("Gráficas en tiempo real (últimos valores recibidos).")
 
-    # Auto-refresh: postMessage cada 2s. Capturamos el resultado y procesamos la cola.
+    # Auto-refresh: postMessage cada 2s. html(...) devuelve el mensaje cuando llega postMessage.
     result_refresh = html(
         """
         <script>
@@ -386,22 +415,41 @@ elif page == "Sensores":
         """,
         height=0,
     )
-    # Si recibimos el mensaje, procesamos la cola MQTT ahora
+    # Cuando el postMessage llega, html(...) devuelve un dict.
     if result_refresh and isinstance(result_refresh, dict):
+        # Procesar la cola MQTT inmediatamente y forzar rerun para mostrar nuevos datos.
         mqtt_message_consumer()
+        try:
+            rerun = getattr(st, "experimental_rerun", None)
+            if callable(rerun):
+                rerun()
+            else:
+                st.experimental_set_query_params(_refresh=int(time.time()*1000))
+        except Exception:
+            # fallback: procesar la cola al menos
+            mqtt_message_consumer()
 
     temps = st.session_state.get("temps", [])
     hums = st.session_state.get("hums", [])
     timestamps = st.session_state.get("timestamps", [])
 
     import pandas as pd
-    if timestamps and temps and hums and len(timestamps) == len(temps) == len(hums):
-        idx = pd.to_datetime([ts/1000.0 for ts in timestamps], unit='s')
-        df = pd.DataFrame({"temperatura": temps, "humedad": hums}, index=idx)
-        st.line_chart(df["temperatura"], height=250, width='stretch')
-        st.line_chart(df["humedad"], height=250, width='stretch')
+    if timestamps and temps and hums and len(timestamps) >= 1:
+        # build dataframe using available lengths (we allow if hums/temps slight mismatch)
+        # align by index from the end
+        min_len = min(len(timestamps), len(temps), len(hums))
+        if min_len >= 1:
+            ts = timestamps[-min_len:]
+            tvals = st.session_state["temps"][-min_len:]
+            hvals = st.session_state["hums"][-min_len:]
+            idx = pd.to_datetime([tt/1000.0 for tt in ts], unit='s')
+            df = pd.DataFrame({"temperatura": tvals, "humedad": hvals}, index=idx)
+            st.line_chart(df["temperatura"], height=250, width='stretch')
+            st.line_chart(df["humedad"], height=250, width='stretch')
+        else:
+            st.write("No hay datos completos de temperatura/humedad todavía. Esperando telemetría desde el ESP32.")
     else:
-        st.write("No hay datos completos de temperatura/humedad todavía. Esperando telemetría desde el ESP32.")
+        st.write("No hay datos de temperatura/humedad todavía. Esperando telemetría desde el ESP32.")
 
     st.write("---")
     st.write("Control manual del servo desde esta página (al activarlo, moverá el servo a 90°).")
@@ -414,7 +462,7 @@ elif page == "Seguridad":
     st.header("Seguridad / PIR")
     st.write("Cuando el sensor PIR se active (evento 'motion'), esta página cambiará a 'Intruso detectado' automáticamente.")
 
-    # Auto-refresh en seguridad (capturamos postMessage y procesamos cola)
+    # Auto-refresh en seguridad (postMessage cada 1.5s). html() devolverá dict al llegar mensaje.
     result_refresh_sec = html(
         """
         <script>
@@ -430,17 +478,33 @@ elif page == "Seguridad":
     )
     if result_refresh_sec and isinstance(result_refresh_sec, dict):
         mqtt_message_consumer()
+        try:
+            rerun = getattr(st, "experimental_rerun", None)
+            if callable(rerun):
+                rerun()
+            else:
+                st.experimental_set_query_params(_refresh=int(time.time()*1000))
+        except Exception:
+            mqtt_message_consumer()
 
-    status = st.session_state.get("security", "No se han detectado intrusos")
-    if status == "Intruso detectado":
-        st.error(status)
+    # Mostrar estado de seguridad basándonos en la marca temporal del último "motion"
+    LAST_MOTION_TIMEOUT_MS = 6000  # 6 segundos: mostrar "Intruso detectado" durante este intervalo
+
+    last_ts = st.session_state.get("last_motion_ts", None)
+    now_ts = int(time.time() * 1000)
+    if last_ts is not None and (now_ts - last_ts) <= LAST_MOTION_TIMEOUT_MS:
+        # Si el último motion fue reciente, mostrar intruso
+        st.session_state["security"] = "Intruso detectado"
+        st.error("Intruso detectado")
     else:
-        st.success(status)
+        # Si hace tiempo que no hay motion, normalizar estado
+        st.session_state.setdefault("security", "No se han detectado intrusos")
+        st.success(st.session_state["security"])
 
     st.write("---")
     st.write("Comando de voz para seguridad: di 'seguridad' para mover el servo a 110°.")
 
-    # Bokeh voice button for security
+    # Bokeh voice button for security (restaurado)
     btn_seg = voice_bokeh_button(event_name="GET_TEXT_SEG", comp_id="seguridad", label="Iniciar reconocimiento (voz)")
     result_seg = streamlit_bokeh_events(
         btn_seg,
