@@ -156,6 +156,27 @@ client = get_mqtt_client()
 # Consume mensajes en cola (non-blocking)
 mqtt_message_consumer()
 
+# --- NUEVA LÓGICA: asegurar que el estado mostrado se derive del último RAW si existe ---
+# Esto evita la discrepancia entre el texto y el JSON que ves en "Último payload".
+last_raw = st.session_state.get("last_lights_state_raw")
+if last_raw:
+    try:
+        parsed_last = json.loads(last_raw)
+        data = parsed_last.get("data") if isinstance(parsed_last, dict) else {}
+        power = None
+        if isinstance(data, dict) and "power" in data:
+            power = data.get("power")
+        elif isinstance(parsed_last, dict) and "power" in parsed_last:
+            power = parsed_last.get("power")
+        if power and isinstance(power, str):
+            p = power.lower()
+            if p in ("on", "off"):
+                st.session_state["light_state"] = p
+    except Exception:
+        # si el raw no es JSON, ignoramos
+        pass
+# --- fin de la nueva lógica ---
+
 # Sidebar: selector de páginas
 page = st.sidebar.selectbox("Páginas", ["Luz", "Sensores", "Seguridad"])
 
