@@ -1,4 +1,3 @@
-# mqtt_client.py
 import json
 import threading
 import time
@@ -6,7 +5,6 @@ from queue import Queue
 
 import paho.mqtt.client as mqtt
 
-# MQTT defaults (coincide con tu .ino)
 MQTT_BROKER = "test.mosquitto.org"
 MQTT_PORT = 1883
 BASE_TOPIC = "giraldoriosjuanjose77-hue"
@@ -35,7 +33,7 @@ class MQTTClient:
         self._thread = None
         self._stop_event = threading.Event()
 
-        # bind callbacks
+      
         self.client.on_connect = self._on_connect
         self.client.on_message = self._on_message
 
@@ -65,7 +63,7 @@ class MQTTClient:
 
     def _on_connect(self, client, userdata, flags, rc):
         print("MQTT connected, rc=", rc)
-        # subscribe to relevant topics
+        
         client.subscribe(TOPIC_LIGHTS_STATE)
         client.subscribe(TOPIC_TEMP_TELE)
         client.subscribe(TOPIC_SERVO_STATE)
@@ -79,11 +77,11 @@ class MQTTClient:
             parsed = json.loads(raw)
         except Exception:
             parsed = None
-        # Always put a 3-tuple for consistency
+        
         try:
             self.queue.put((topic, parsed, raw))
         except Exception as e:
-            # As a fallback, put a 2-tuple (compatibility)
+            
             print("MQTT queue put error, falling back to 2-tuple:", e)
             self.queue.put((topic, parsed))
 
