@@ -1,3 +1,4 @@
+# mqtt_client.py
 import json
 import threading
 import time
@@ -23,8 +24,8 @@ class MQTTClient:
     Simple wrapper around paho-mqtt that publishes/subscribes and pushes parsed messages
     into a Queue for consumption by the Streamlit app.
 
-    NOTE: _on_message places a tuple (topic, parsed_obj_or_None, raw_payload_str) in the queue.
-    This lets the app inspect the raw payload when parsing fails or for debugging.
+    The on_message always puts a 3-tuple (topic, parsed_obj_or_None, raw_payload_str)
+    so app.py can rely on the shape — but app.py will also accept older 2-tuples if present.
     """
     def __init__(self, broker=MQTT_BROKER, port=MQTT_PORT, queue: Queue = None):
         self.client = mqtt.Client()
@@ -49,10 +50,8 @@ class MQTTClient:
         try:
             self.client.connect(self.broker, self.port, keepalive=60)
         except Exception as e:
-            # The app will retry in a simple loop
             print("MQTT connect error:", e)
         self.client.loop_start()
-        # keep thread alive until stop requested
         while not self._stop_event.is_set():
             time.sleep(0.1)
         self.client.loop_stop()
@@ -75,15 +74,18 @@ class MQTTClient:
     def _on_message(self, client, userdata, msg):
         topic = msg.topic
         raw = msg.payload.decode('utf-8', errors='ignore')
-        # try parse JSON
         parsed = None
         try:
             parsed = json.loads(raw)
         except Exception:
             parsed = None
-        # push to queue: (topic, parsed_obj_or_None, raw_payload_str)
-        # The Streamlit app will handle parsing and logging in a robust way.
-        self.queue.put((topic, parsed, raw))
+        # Always put a 3-tuple for consistency
+        try:
+            self.queue.put((topic, parsed, raw))
+        except Exception as e:
+            # As a fallback, put a 2-tuple (compatibility)
+            print("MQTT queue put error, falling back to 2-tuple:", e)
+            self.queue.put((topic, parsed))
 
     def publish_json(self, topic, payload_dict, retain=False):
         payload = json.dumps(payload_dict)
