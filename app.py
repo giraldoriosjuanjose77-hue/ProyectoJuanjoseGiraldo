@@ -1,6 +1,4 @@
-# app.py
 import json
-import threading
 import time
 from queue import Queue, Empty
 
@@ -50,7 +48,6 @@ def mqtt_message_consumer():
                     parsed = item[1] if len(item) > 1 else None
                     raw = item[2] if len(item) > 2 else None
                 except Exception:
-                    # saltar este item si no podemos entenderlo
                     continue
 
             # Para depuración, si el topic es lights/state almacenamos el raw
@@ -58,7 +55,6 @@ def mqtt_message_consumer():
                 if raw is not None:
                     st.session_state["last_lights_state_raw"] = raw
                 else:
-                    # si no hay raw, intentar reconstruir del parsed
                     try:
                         st.session_state["last_lights_state_raw"] = json.dumps(parsed, ensure_ascii=False)
                     except Exception:
@@ -91,7 +87,6 @@ def mqtt_message_consumer():
                         if p in ("on", "off"):
                             st.session_state["light_state"] = p
                             updated = True
-                    # si power no es string o no es on/off, lo ignoramos (lo dejamos para depuración)
 
             elif topic.endswith("/temp/telemetry"):
                 if isinstance(parsed, dict):
@@ -118,21 +113,18 @@ def mqtt_message_consumer():
                         updated = True
 
             elif topic.endswith("/servo/state"):
-                # opcional: manejar confirmaciones del servo
+                # opcional: manejar confirmaciones del servo si necesitas
                 pass
 
     except Empty:
         pass
 
     if updated:
-        # Intentamos forzar rerun si la función existe; si no, no fallamos
         try:
-            # experimental_rerun puede no estar presente en algunos entornos
             rerun = getattr(st, "experimental_rerun", None)
             if callable(rerun):
                 rerun()
         except Exception:
-            # no bloqueamos la app si rerun falla
             pass
 
 # Publica comandos de luz (matching tu .ino)
@@ -180,15 +172,29 @@ if page == "Luz":
 
     st.write("Usa el botón abajo para comenzar el reconocimiento por voz. Di 'Encender' o 'Apagar'.")
     col1, col2 = st.columns([1, 3])
+
+    # Botón ON: publicamos y actualizamos el raw esperado inmediatamente
     with col1:
         if st.button("Activar LED (enviar ON)"):
             publish_light_cmd(client, "on")
-            st.session_state["light_state"] = "on"   # feedback inmediato
+            st.session_state["light_state"] = "on"
+            st.session_state["last_lights_state_raw"] = json.dumps({
+                "ts": int(time.time() * 1000),
+                "device": "esp32-01",
+                "data": {"power": "on"}
+            }, ensure_ascii=False)
             st.success("Comando enviado: encender")
+
+    # Botón OFF
     with col2:
         if st.button("Desactivar LED (enviar OFF)"):
             publish_light_cmd(client, "off")
-            st.session_state["light_state"] = "off"  # feedback inmediato
+            st.session_state["light_state"] = "off"
+            st.session_state["last_lights_state_raw"] = json.dumps({
+                "ts": int(time.time() * 1000),
+                "device": "esp32-01",
+                "data": {"power": "off"}
+            }, ensure_ascii=False)
             st.success("Comando enviado: apagar")
 
     st.write("---")
@@ -200,10 +206,20 @@ if page == "Luz":
         if "encender" in txt:
             publish_light_cmd(client, "on")
             st.session_state["light_state"] = "on"
+            st.session_state["last_lights_state_raw"] = json.dumps({
+                "ts": int(time.time() * 1000),
+                "device": "esp32-01",
+                "data": {"power": "on"}
+            }, ensure_ascii=False)
             st.success("Comando enviado: encender")
         elif "apagar" in txt:
             publish_light_cmd(client, "off")
             st.session_state["light_state"] = "off"
+            st.session_state["last_lights_state_raw"] = json.dumps({
+                "ts": int(time.time() * 1000),
+                "device": "esp32-01",
+                "data": {"power": "off"}
+            }, ensure_ascii=False)
             st.success("Comando enviado: apagar")
         else:
             st.warning("No se reconoció 'encender' ni 'apagar' en el texto.")
@@ -223,7 +239,6 @@ elif page == "Sensores":
     if timestamps and temps and hums:
         idx = pd.to_datetime([ts/1000.0 for ts in timestamps], unit='s')
         df = pd.DataFrame({"temperatura": temps, "humedad": hums}, index=idx)
-        # evitando deprecación: usar width='stretch' en futuras versiones
         st.line_chart(df["temperatura"], height=250, width='stretch')
         st.line_chart(df["humedad"], height=250, width='stretch')
     else:
@@ -252,6 +267,7 @@ elif page == "Seguridad":
         txt = value.get("text", "").lower()
         st.write("Reconocido:", txt)
         if "seguridad" in txt:
+            # publicamos y damos feedback inmediato (esperamos confirmación por /servo/state si es necesaria)
             publish_servo_cmd(client, 110)
             st.success("Comando enviado: mover servo a 110°")
         else:
