@@ -10,6 +10,85 @@ from streamlit.components.v1 import html
 from mqtt_client import MQTTClient, TOPIC_LIGHTS_CMD, TOPIC_SERVO_CMD
 
 # -----------------------
+# Visual: background gradient (negro -> dorado)
+# Insertar CSS antes de set_page_config para que aplique globalmente.
+# -----------------------
+st.markdown(
+    """
+    <style>
+    /* Fondo degradado general: negro -> dorado */
+    .stApp, .main, .block-container, .reportview-container {
+      background: linear-gradient(180deg, #000000 0%, #D4AF37 100%) !important;
+      background-attachment: fixed !important;
+      color: #f5f3ee !important;
+    }
+
+    /* Sidebar: versión más oscura del degradado (para contraste) */
+    [data-testid="stSidebar"] > div:first-child {
+      background: linear-gradient(180deg, #000000 0%, #2b2b1f 100%) !important;
+    }
+
+    /* Hacer los contenedores ligeramente translúcidos para que se vea fondo */
+    .css-1d391kg, .css-1lcbmhc, .stButton>button, .stTextInput>div, .stSelectbox>div {
+      background: rgba(255,255,255,0.04) !important;
+      color: #fff !important;
+    }
+
+    /* Encabezados y textos importantes en color dorado pálido */
+    h1, h2, h3, h4, .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
+      color: #f6e7b1 !important;
+    }
+    .stMarkdown, .streamlit-expanderHeader, .stText, .stWrite {
+      color: #f5f3ee !important;
+    }
+
+    /* Botones: borde dorado y fondo semitransparente */
+    .stButton>button {
+      border: 1px solid rgba(212,175,55,0.9) !important;
+      background: rgba(255,255,255,0.03) !important;
+      color: #fff !important;
+    }
+    .stButton>button:hover {
+      background: rgba(212,175,55,0.08) !important;
+      color: #fff !important;
+    }
+
+    /* Inputs / select / textareas: bordes dorados suaves */
+    input, textarea, select {
+      border: 1px solid rgba(212,175,55,0.14) !important;
+      background: rgba(255,255,255,0.02) !important;
+      color: #fff !important;
+    }
+
+    /* Tablas / códigos: fondo ligeramente más oscuro */
+    .stDataFrame, pre, code {
+      background: rgba(0,0,0,0.35) !important;
+      color: #fff !important;
+    }
+
+    /* Gráficos Bokeh / Matplotlib: intentar forzar fondo transparente */
+    .bk-root, .bk-plot, .bk-canvas {
+      background: transparent !important;
+    }
+
+    /* Evitar scroll horizontal inesperado */
+    html, body, .main {
+      overflow-x: hidden !important;
+    }
+
+    /* Ajustes móviles / pequeños dispositivos: mantener legibilidad */
+    @media (max-width: 640px) {
+      .stApp, .block-container {
+        padding-left: 8px !important;
+        padding-right: 8px !important;
+      }
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# -----------------------
 # Helper para inicializar MQTT (singleton dentro de Streamlit)
 # -----------------------
 def get_mqtt_client():
@@ -394,152 +473,3 @@ if page == "Luz":
 
     st.write("Último payload recibido en /lights/state (raw):")
     st.code(st.session_state.get("last_lights_state_raw", "— no recibido —"))
-
-# --- PÁGINA SENSORES ---
-elif page == "Sensores":
-    st.header("Temperatura y Humedad (DHT22)")
-    st.write("Gráficas en tiempo real (últimos valores recibidos).")
-
-    # Safe auto-refresh: only when tab visible, every 2s
-    result_refresh = html(
-        """
-        <script>
-        if (!window._streamlit_autorefresh_safe) {
-          window._streamlit_autorefresh_safe = true;
-          var _afr_interval = setInterval(function(){
-            try {
-              if (document.visibilityState === "visible") {
-                window.parent.postMessage({isStreamlitMessage:true, component:'autorefresh_safe', ts: Date.now()}, "*");
-              }
-            } catch(e) {}
-          }, 2000);
-          window.addEventListener("pagehide", function(){ clearInterval(_afr_interval); });
-        }
-        </script>
-        """,
-        height=0,
-    )
-    if result_refresh and isinstance(result_refresh, dict):
-        mqtt_message_consumer()
-        try:
-            rerun = getattr(st, "experimental_rerun", None)
-            if callable(rerun):
-                rerun()
-        except Exception:
-            pass
-
-    temps = st.session_state.get("temps", [])
-    hums = st.session_state.get("hums", [])
-    timestamps = st.session_state.get("timestamps", [])
-
-    import pandas as pd
-    if timestamps and (len(temps) >= 1 or len(hums) >= 1):
-        # align recent values by minimum available length
-        min_len = min(len(timestamps), len(temps), len(hums)) if (len(temps) and len(hums)) else min(len(timestamps), max(len(temps), len(hums)))
-        if min_len >= 1:
-            ts = timestamps[-min_len:]
-            tvals = st.session_state["temps"][-min_len:]
-            hvals = st.session_state["hums"][-min_len:]
-            idx = pd.to_datetime([tt/1000.0 for tt in ts], unit='s')
-            df = pd.DataFrame({"temperatura": tvals, "humedad": hvals}, index=idx)
-            st.line_chart(df["temperatura"], height=250, width='stretch')
-            st.line_chart(df["humedad"], height=250, width='stretch')
-        else:
-            st.write("No hay datos completos de temperatura/humedad todavía. Esperando telemetría desde el ESP32.")
-    else:
-        st.write("No hay datos de temperatura/humedad todavía. Esperando telemetría desde el ESP32.")
-
-    st.write("---")
-    st.write("Control manual del servo desde esta página (al activarlo, moverá el servo a 90°).")
-    if st.button("Activar servo (90°)"):
-        publish_servo_cmd(client, 90)
-        st.success("Comando servo enviado: 90°")
-
-# --- PÁGINA SEGURIDAD ---
-elif page == "Seguridad":
-    st.header("Seguridad / PIR")
-    st.write("Cuando el sensor PIR se active (evento 'motion'), esta página cambiará a 'Intruso detectado' automáticamente.")
-
-    # Safe auto-refresh in security: only when tab visible, every 2s
-    result_refresh_sec = html(
-        """
-        <script>
-        if (!window._streamlit_autorefresh_safe_sec) {
-          window._streamlit_autorefresh_safe_sec = true;
-          var _afr_interval_sec = setInterval(function(){
-            try {
-              if (document.visibilityState === "visible") {
-                window.parent.postMessage({isStreamlitMessage:true, component:'autorefresh_safe_sec', ts: Date.now()}, "*");
-              }
-            } catch(e) {}
-          }, 2000);
-          window.addEventListener("pagehide", function(){ clearInterval(_afr_interval_sec); });
-        }
-        </script>
-        """,
-        height=0,
-    )
-    if result_refresh_sec and isinstance(result_refresh_sec, dict):
-        mqtt_message_consumer()
-        try:
-            rerun = getattr(st, "experimental_rerun", None)
-            if callable(rerun):
-                rerun()
-        except Exception:
-            pass
-
-    # Mostrar estado de seguridad basándonos en la marca temporal del último "motion"
-    LAST_MOTION_TIMEOUT_MS = 6000  # 6 segundos: mostrar "Intruso detectado" durante este intervalo
-
-    last_ts = st.session_state.get("last_motion_ts", None)
-    now_ts = int(time.time() * 1000)
-    if last_ts is not None and (now_ts - last_ts) <= LAST_MOTION_TIMEOUT_MS:
-        # Si el último motion fue reciente, mostrar intruso
-        st.session_state["security"] = "Intruso detectado"
-        st.error("Intruso detectado")
-    else:
-        # Si hace tiempo que no hay motion, normalizar estado
-        st.session_state.setdefault("security", "No se han detectado intrusos")
-        st.success(st.session_state["security"])
-
-    st.write("---")
-    st.write("Comando de voz para seguridad: di 'seguridad' para mover el servo a 110°.")
-
-    # Bokeh voice button for security (restaurado)
-    btn_seg = voice_bokeh_button(event_name="GET_TEXT_SEG", comp_id="seguridad", label="Iniciar reconocimiento (voz)")
-    result_seg = streamlit_bokeh_events(
-        btn_seg,
-        events="GET_TEXT_SEG",
-        key="voice_listen_seg",
-        debounce_time=0,
-        override_height=80,
-    )
-
-    if result_seg and "GET_TEXT_SEG" in result_seg:
-        raw = result_seg.get("GET_TEXT_SEG")
-        try:
-            payload = json.loads(raw)
-        except Exception:
-            payload = {"text": raw}
-        if payload.get("text"):
-            txt = payload.get("text", "").lower()
-            st.write("Reconocido:", txt)
-            if "seguridad" in txt:
-                publish_servo_cmd(client, 110)
-                st.success("Comando enviado: mover servo a 110°")
-            else:
-                st.warning("No se reconoció la palabra 'seguridad' en el texto.")
-        elif payload.get("error"):
-            st.error(f"Error de reconocimiento: {payload.get('error')}")
-
-# Footer
-st.sidebar.write("MQTT broker:")
-st.sidebar.write(f"{client.broker}:{client.port}")
-st.sidebar.write("Último client id (si disponible):")
-try:
-    cid = client.client._client_id.decode() if hasattr(client.client, '_client_id') else ""
-except Exception:
-    cid = ""
-st.sidebar.write(cid)
-st.sidebar.write("Último payload /lights/state (raw):")
-st.sidebar.write(st.session_state.get("last_lights_state_raw", "— no recibido —"))
