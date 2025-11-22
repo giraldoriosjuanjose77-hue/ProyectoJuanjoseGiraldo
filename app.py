@@ -3,7 +3,8 @@ import time
 from queue import Queue, Empty
 
 import streamlit as st
-from streamlit.components.v1 import html
+from bokeh.models import Button, CustomJS
+from streamlit_bokeh_events import streamlit_bokeh_events
 
 from mqtt_client import MQTTClient, TOPIC_LIGHTS_CMD, TOPIC_SERVO_CMD
 
@@ -42,7 +43,6 @@ def mqtt_message_consumer():
                 topic, parsed = item
                 raw = None
             else:
-                # formato inesperado: intentar extraer topic/raw
                 try:
                     topic = item[0]
                     parsed = item[1] if len(item) > 1 else None
@@ -70,7 +70,6 @@ def mqtt_message_consumer():
                         power = data.get("power")
                     if power is None and "power" in parsed:
                         power = parsed.get("power")
-                # heurística sobre raw si no hubo parsed power
                 if power is None and raw is not None and '"power"' in raw:
                     try:
                         tmp = json.loads(raw)
@@ -136,18 +135,86 @@ def publish_servo_cmd(client, angle: int):
     payload = {"angle": angle}
     client.publish_json(TOPIC_SERVO_CMD, payload)
 
-# Componente HTML para reconocimiento de voz
-def voice_recognition_component(key="voice"):
-    with open("speech_component.html", "r", encoding="utf-8") as f:
-        content = f.read()
-    value = html(content, height=160)
-    return value
+# -----------------------
+# BOKEH voice component helper
+# -----------------------
+def voice_bokeh_button(event_name: str, comp_id: str, label: str = "Iniciar reconocimiento"):
+    """
+    Crea un botón Bokeh que al pulsarlo dispara la Web Speech API en el navegador
+    y emite un CustomEvent con nombre `event_name`. Se incluye fallback y manejo
+    básico de errores. El `comp_id` se incorpora al evento para distinguir componentes.
+    """
+    # JavaScript: crea/gestiona una instancia por componente en window.speechRecognitionInstances
+    js = f"""
+    // Mantener instancias por componente para evitar múltiples starts
+    if (!window.speechRecognitionInstances) {{
+        window.speechRecognitionInstances = {{}};
+    }}
+    const comp = "{comp_id}";
+    const eventName = "{event_name}";
+    const existing = window.speechRecognitionInstances[comp];
+
+    const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRec) {{
+        // informar a Streamlit que no hay API disponible
+        document.dispatchEvent(new CustomEvent(eventName, {{detail: JSON.stringify({{error: "no_speech_api", component: comp}})}}));
+    }} else {{
+        // si ya existe, toggle stop/start
+        if (existing && existing._running) {{
+            try {{
+                existing.stop();
+            }} catch(e){{/* ignore */}}
+            existing._running = false;
+            // notificar fin si se desea
+            document.dispatchEvent(new CustomEvent(eventName, {{detail: JSON.stringify({{event: "stopped", component: comp}})}}));
+        }} else {{
+            // crear instancia nueva o reutilizar
+            let recognition = existing;
+            if (!recognition) {{
+                recognition = new SpeechRec();
+                recognition.lang = "es-ES";
+                recognition.interimResults = false;
+                recognition.continuous = false;
+                recognition.onresult = function(e) {{
+                    var value = "";
+                    for (var i = e.resultIndex; i < e.results.length; ++i) {{
+                        if (e.results[i].isFinal) {{
+                            value += e.results[i][0].transcript;
+                        }}
+                    }}
+                    if (value != "") {{
+                        const payload = {{text: value.trim(), component: comp}};
+                        document.dispatchEvent(new CustomEvent(eventName, {{detail: JSON.stringify(payload)}}));
+                    }}
+                }};
+                recognition.onerror = function(ev) {{
+                    const payload = {{error: ev.error, component: comp}};
+                    document.dispatchEvent(new CustomEvent(eventName, {{detail: JSON.stringify(payload)}}));
+                }};
+                recognition.onend = function() {{
+                    recognition._running = false;
+                    document.dispatchEvent(new CustomEvent(eventName, {{detail: JSON.stringify({{event: "ended", component: comp}})}}));
+                }};
+                window.speechRecognitionInstances[comp] = recognition;
+            }}
+            try {{
+                recognition._running = true;
+                recognition.start();
+            }} catch(e) {{
+                // si start falla, notificar
+                document.dispatchEvent(new CustomEvent(eventName, {{detail: JSON.stringify({{error: String(e), component: comp}})}}));
+            }}
+        }}
+    }}
+    """
+    btn = Button(label=label, width=220)
+    btn.js_on_event("button_click", CustomJS(code=js))
+    return btn
 
 # -----------------------
 # Interfaz Streamlit
 # -----------------------
 st.set_page_config(page_title="ESP32 — Control y Monitor", layout="wide")
-
 st.title("ESP32 — Interfaz Streamlit (MQTT + Voz)")
 
 # Inicializa MQTT
@@ -156,7 +223,7 @@ client = get_mqtt_client()
 # Procesa mensajes entrantes
 mqtt_message_consumer()
 
-# Intentar sincronizar light_state desde last_lights_state_raw (si existe)
+# Sincronizar light_state desde last_lights_state_raw (si existe)
 last_raw = st.session_state.get("last_lights_state_raw")
 if last_raw:
     try:
@@ -177,9 +244,9 @@ if last_raw:
 # Sidebar: selector de páginas
 page = st.sidebar.selectbox("Páginas", ["Luz", "Sensores", "Seguridad"])
 
+# --- PÁGINA LUZ ---
 if page == "Luz":
     st.header("Control de luz (voz)")
-
     st.write("Usa el botón abajo para comenzar el reconocimiento por voz. Di 'Encender' o 'Apagar'.")
 
     col1, col2 = st.columns([1, 3])
@@ -188,7 +255,6 @@ if page == "Luz":
     with col1:
         if st.button("Activar LED (enviar ON)"):
             publish_light_cmd(client, "on")
-            # feedback inmediato
             st.session_state["light_state"] = "on"
             st.session_state["last_lights_state_raw"] = json.dumps({
                 "ts": int(time.time() * 1000),
@@ -210,33 +276,56 @@ if page == "Luz":
             st.success("Comando enviado: apagar")
 
     st.write("---")
-    st.write("Reconocimiento de voz (Web Speech API). Pulsa 'Iniciar reconocimiento' en el componente que aparece y habla.")
-    value = voice_recognition_component(key="voice_luz")
-    if value and isinstance(value, dict) and value.get("text"):
-        txt = value.get("text", "").lower()
-        st.write("Reconocido:", txt)
-        if "encender" in txt:
-            publish_light_cmd(client, "on")
-            st.session_state["light_state"] = "on"
-            st.session_state["last_lights_state_raw"] = json.dumps({
-                "ts": int(time.time() * 1000),
-                "device": "esp32-01",
-                "data": {"power": "on"}
-            }, ensure_ascii=False)
-            st.success("Comando enviado: encender")
-        elif "apagar" in txt:
-            publish_light_cmd(client, "off")
-            st.session_state["light_state"] = "off"
-            st.session_state["last_lights_state_raw"] = json.dumps({
-                "ts": int(time.time() * 1000),
-                "device": "esp32-01",
-                "data": {"power": "off"}
-            }, ensure_ascii=False)
-            st.success("Comando enviado: apagar")
-        else:
-            st.warning("No se reconoció 'encender' ni 'apagar' en el texto.")
+    st.write("Reconocimiento por voz (Bokeh). Pulsa 'Iniciar reconocimiento' y habla en español (Chrome/Edge recom.)")
 
-    # --- Mostrar el estado DESPUÉS de haber manejado botones/voz para que sea coherente ---
+    # Componente Bokeh para voz (evento GET_TEXT_LUZ)
+    btn_luz = voice_bokeh_button(event_name="GET_TEXT_LUZ", comp_id="luz", label="Iniciar reconocimiento (voz)")
+    result = streamlit_bokeh_events(
+        btn_luz,
+        events="GET_TEXT_LUZ",
+        key="voice_listen_luz",
+        debounce_time=0,
+        override_height=80,
+    )
+
+    if result and "GET_TEXT_LUZ" in result:
+        raw = result.get("GET_TEXT_LUZ")
+        try:
+            payload = json.loads(raw)
+        except Exception:
+            payload = {"text": raw}
+        # payload may contain text, error, event, component
+        if payload.get("text"):
+            txt = payload.get("text", "").lower()
+            st.write("Reconocido:", txt)
+            if "encender" in txt:
+                publish_light_cmd(client, "on")
+                st.session_state["light_state"] = "on"
+                st.session_state["last_lights_state_raw"] = json.dumps({
+                    "ts": int(time.time() * 1000),
+                    "device": "esp32-01",
+                    "data": {"power": "on"}
+                }, ensure_ascii=False)
+                st.success("Comando enviado: encender")
+            elif "apagar" in txt:
+                publish_light_cmd(client, "off")
+                st.session_state["light_state"] = "off"
+                st.session_state["last_lights_state_raw"] = json.dumps({
+                    "ts": int(time.time() * 1000),
+                    "device": "esp32-01",
+                    "data": {"power": "off"}
+                }, ensure_ascii=False)
+                st.success("Comando enviado: apagar")
+            else:
+                st.warning("No se reconoció 'encender' ni 'apagar' en el texto.")
+        elif payload.get("error"):
+            st.error(f"Error de reconocimiento: {payload.get('error')}")
+        elif payload.get("event") == "stopped":
+            st.info("Reconocimiento detenido.")
+        elif payload.get("event") == "ended":
+            st.info("Reconocimiento finalizado.")
+
+    # Mostrar estado después de botones/voz
     st.write("Estado actual de la luz:")
     light_state = st.session_state.get("light_state", "unknown")
     if light_state == "on":
@@ -250,6 +339,7 @@ if page == "Luz":
     st.write("Último payload recibido en /lights/state (raw):")
     st.code(st.session_state.get("last_lights_state_raw", "— no recibido —"))
 
+# --- PÁGINA SENSORES ---
 elif page == "Sensores":
     st.header("Temperatura y Humedad (DHT22)")
     st.write("Gráficas en tiempo real (últimos valores recibidos).")
@@ -272,6 +362,7 @@ elif page == "Sensores":
         publish_servo_cmd(client, 90)
         st.success("Comando servo enviado: 90°")
 
+# --- PÁGINA SEGURIDAD ---
 elif page == "Seguridad":
     st.header("Seguridad / PIR")
     status = st.session_state.get("security", "No se han detectado intrusos")
@@ -281,18 +372,43 @@ elif page == "Seguridad":
         st.success(status)
 
     st.write("Cuando el sensor PIR se active (evento 'motion'), esta página cambiará a 'Intruso detectado' automáticamente.")
-
     st.write("---")
     st.write("Comando de voz para seguridad: di 'seguridad' para mover el servo a 110°.")
-    value = voice_recognition_component(key="voice_seguridad")
-    if value and isinstance(value, dict) and value.get("text"):
-        txt = value.get("text", "").lower()
-        st.write("Reconocido:", txt)
-        if "seguridad" in txt:
-            publish_servo_cmd(client, 110)
-            st.success("Comando enviado: mover servo a 110°")
-        else:
-            st.warning("No se reconoció la palabra 'seguridad' en el texto.")
+
+    # Bokeh voice button for security (event GET_TEXT_SEG)
+    btn_seg = voice_bokeh_button(event_name="GET_TEXT_SEG", comp_id="seguridad", label="Iniciar reconocimiento (voz)")
+    result_seg = streamlit_bokeh_events(
+        btn_seg,
+        events="GET_TEXT_SEG",
+        key="voice_listen_seg",
+        debounce_time=0,
+        override_height=80,
+    )
+
+    if result_seg and "GET_TEXT_SEG" in result_seg:
+        raw = result_seg.get("GET_TEXT_SEG")
+        try:
+            payload = json.loads(raw)
+        except Exception:
+            payload = {"text": raw}
+        if payload.get("text"):
+            txt = payload.get("text", "").lower()
+            st.write("Reconocido:", txt)
+            if "seguridad" in txt:
+                publish_servo_cmd(client, 110)
+                st.success("Comando enviado: mover servo a 110°")
+            else:
+                st.warning("No se reconoció la palabra 'seguridad' en el texto.")
+        elif payload.get("error"):
+            st.error(f"Error de reconocimiento: {payload.get('error')}")
+
+    # Mostrar estado seguridad e información
+    st.write("Estado de seguridad:")
+    status = st.session_state.get("security", "No se han detectado intrusos")
+    if status == "Intruso detectado":
+        st.error(status)
+    else:
+        st.success(status)
 
 # Footer / información de conexión MQTT
 st.sidebar.write("MQTT broker:")
