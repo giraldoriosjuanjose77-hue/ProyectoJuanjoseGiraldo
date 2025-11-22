@@ -153,11 +153,10 @@ st.title("ESP32 — Interfaz Streamlit (MQTT + Voz)")
 # Inicializa MQTT
 client = get_mqtt_client()
 
-# Consume mensajes en cola (non-blocking)
+# Procesa mensajes entrantes
 mqtt_message_consumer()
 
-# --- NUEVA LÓGICA: asegurar que el estado mostrado se derive del último RAW si existe ---
-# Esto evita la discrepancia entre el texto y el JSON que ves en "Último payload".
+# Intentar sincronizar light_state desde last_lights_state_raw (si existe)
 last_raw = st.session_state.get("last_lights_state_raw")
 if last_raw:
     try:
@@ -173,31 +172,23 @@ if last_raw:
             if p in ("on", "off"):
                 st.session_state["light_state"] = p
     except Exception:
-        # si el raw no es JSON, ignoramos
         pass
-# --- fin de la nueva lógica ---
 
 # Sidebar: selector de páginas
 page = st.sidebar.selectbox("Páginas", ["Luz", "Sensores", "Seguridad"])
 
 if page == "Luz":
     st.header("Control de luz (voz)")
-    st.write("Estado actual de la luz:")
-    light_state = st.session_state.get("light_state", "unknown")
-    if light_state == "on":
-        st.success("La luz está ENCENDIDA")
-    elif light_state == "off":
-        st.info("La luz está APAGADA")
-    else:
-        st.write("Estado desconocido (esperando mensaje retained del dispositivo).")
 
     st.write("Usa el botón abajo para comenzar el reconocimiento por voz. Di 'Encender' o 'Apagar'.")
+
     col1, col2 = st.columns([1, 3])
 
     # Botón ON: publicamos y actualizamos el raw esperado inmediatamente
     with col1:
         if st.button("Activar LED (enviar ON)"):
             publish_light_cmd(client, "on")
+            # feedback inmediato
             st.session_state["light_state"] = "on"
             st.session_state["last_lights_state_raw"] = json.dumps({
                 "ts": int(time.time() * 1000),
@@ -245,6 +236,16 @@ if page == "Luz":
         else:
             st.warning("No se reconoció 'encender' ni 'apagar' en el texto.")
 
+    # --- Mostrar el estado DESPUÉS de haber manejado botones/voz para que sea coherente ---
+    st.write("Estado actual de la luz:")
+    light_state = st.session_state.get("light_state", "unknown")
+    if light_state == "on":
+        st.success("La luz está ENCENDIDA")
+    elif light_state == "off":
+        st.info("La luz está APAGADA")
+    else:
+        st.write("Estado desconocido (esperando mensaje retained del dispositivo).")
+
     # Mostrar payload RAW más reciente (depuración)
     st.write("Último payload recibido en /lights/state (raw):")
     st.code(st.session_state.get("last_lights_state_raw", "— no recibido —"))
@@ -288,7 +289,6 @@ elif page == "Seguridad":
         txt = value.get("text", "").lower()
         st.write("Reconocido:", txt)
         if "seguridad" in txt:
-            # publicamos y damos feedback inmediato (esperamos confirmación por /servo/state si es necesaria)
             publish_servo_cmd(client, 110)
             st.success("Comando enviado: mover servo a 110°")
         else:
