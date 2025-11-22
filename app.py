@@ -20,9 +20,9 @@ def get_mqtt_client():
         st.session_state["mqtt_client"] = client
         # estados iniciales
         st.session_state.setdefault("light_state", "unknown")
-        st.session_state.setdefault("temps", [])   # lista de (ts, value)
-        st.session_state.setdefault("hums", [])
-        st.session_state.setdefault("timestamps", [])
+        st.session_state.setdefault("temps", [])   # lista de valores de temperatura
+        st.session_state.setdefault("hums", [])    # lista de valores de humedad
+        st.session_state.setdefault("timestamps", [])  # lista de timestamps (ms)
         st.session_state.setdefault("security", "No se han detectado intrusos")
         # para depuración: último payload RAW recibido en /lights/state
         st.session_state.setdefault("last_lights_state_raw", None)
@@ -190,18 +190,17 @@ def mqtt_message_consumer():
         pass
 
     if updated:
-        # Forzar rerun seguro
+        # Forzar rerun seguro: solo usar experimental_rerun si existe
         try:
             rerun = getattr(st, "experimental_rerun", None)
             if callable(rerun):
                 rerun()
             else:
-                st.experimental_set_query_params(_refresh=int(time.time()*1000))
-        except Exception:
-            try:
-                st.experimental_set_query_params(_refresh=int(time.time()*1000))
-            except Exception:
+                # Evitar usar st.experimental_set_query_params (obsoleta) repetidamente
+                # No forzamos rerun mediante query params para reducir log spam.
                 pass
+        except Exception:
+            pass
 
 # Publica comandos de luz / servo
 def publish_light_cmd(client, on_or_off: str):
@@ -401,43 +400,42 @@ elif page == "Sensores":
     st.header("Temperatura y Humedad (DHT22)")
     st.write("Gráficas en tiempo real (últimos valores recibidos).")
 
-    # Auto-refresh: postMessage cada 2s. html(...) devuelve el mensaje cuando llega postMessage.
+    # Safe auto-refresh: only when tab visible, every 4s
     result_refresh = html(
         """
         <script>
-        if (!window._streamlit_autorefresh_sensors) {
-            window._streamlit_autorefresh_sensors = true;
-            setInterval(function(){
-                window.parent.postMessage({isStreamlitMessage:true, component:'autorefresh_sensors', ts: Date.now()}, "*");
-            }, 2000);
+        if (!window._streamlit_autorefresh_safe) {
+          window._streamlit_autorefresh_safe = true;
+          var _afr_interval = setInterval(function(){
+            try {
+              if (document.visibilityState === "visible") {
+                window.parent.postMessage({isStreamlitMessage:true, component:'autorefresh_safe', ts: Date.now()}, "*");
+              }
+            } catch(e) {}
+          }, 4000);
+          window.addEventListener("pagehide", function(){ clearInterval(_afr_interval); });
         }
         </script>
         """,
         height=0,
     )
-    # Cuando el postMessage llega, html(...) devuelve un dict.
     if result_refresh and isinstance(result_refresh, dict):
-        # Procesar la cola MQTT inmediatamente y forzar rerun para mostrar nuevos datos.
         mqtt_message_consumer()
         try:
             rerun = getattr(st, "experimental_rerun", None)
             if callable(rerun):
                 rerun()
-            else:
-                st.experimental_set_query_params(_refresh=int(time.time()*1000))
         except Exception:
-            # fallback: procesar la cola al menos
-            mqtt_message_consumer()
+            pass
 
     temps = st.session_state.get("temps", [])
     hums = st.session_state.get("hums", [])
     timestamps = st.session_state.get("timestamps", [])
 
     import pandas as pd
-    if timestamps and temps and hums and len(timestamps) >= 1:
-        # build dataframe using available lengths (we allow if hums/temps slight mismatch)
-        # align by index from the end
-        min_len = min(len(timestamps), len(temps), len(hums))
+    if timestamps and (len(temps) >= 1 or len(hums) >= 1):
+        # align recent values by minimum available length
+        min_len = min(len(timestamps), len(temps), len(hums)) if (len(temps) and len(hums)) else min(len(timestamps), max(len(temps), len(hums)))
         if min_len >= 1:
             ts = timestamps[-min_len:]
             tvals = st.session_state["temps"][-min_len:]
@@ -462,15 +460,20 @@ elif page == "Seguridad":
     st.header("Seguridad / PIR")
     st.write("Cuando el sensor PIR se active (evento 'motion'), esta página cambiará a 'Intruso detectado' automáticamente.")
 
-    # Auto-refresh en seguridad (postMessage cada 1.5s). html() devolverá dict al llegar mensaje.
+    # Safe auto-refresh in security: only when tab visible, every 4s
     result_refresh_sec = html(
         """
         <script>
-        if (!window._streamlit_autorefresh_security) {
-            window._streamlit_autorefresh_security = true;
-            setInterval(function(){
-                window.parent.postMessage({isStreamlitMessage:true, component:'autorefresh_security', ts: Date.now()}, "*");
-            }, 1500);
+        if (!window._streamlit_autorefresh_safe_sec) {
+          window._streamlit_autorefresh_safe_sec = true;
+          var _afr_interval_sec = setInterval(function(){
+            try {
+              if (document.visibilityState === "visible") {
+                window.parent.postMessage({isStreamlitMessage:true, component:'autorefresh_safe_sec', ts: Date.now()}, "*");
+              }
+            } catch(e) {}
+          }, 4000);
+          window.addEventListener("pagehide", function(){ clearInterval(_afr_interval_sec); });
         }
         </script>
         """,
@@ -482,10 +485,8 @@ elif page == "Seguridad":
             rerun = getattr(st, "experimental_rerun", None)
             if callable(rerun):
                 rerun()
-            else:
-                st.experimental_set_query_params(_refresh=int(time.time()*1000))
         except Exception:
-            mqtt_message_consumer()
+            pass
 
     # Mostrar estado de seguridad basándonos en la marca temporal del último "motion"
     LAST_MOTION_TIMEOUT_MS = 6000  # 6 segundos: mostrar "Intruso detectado" durante este intervalo
