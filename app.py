@@ -75,10 +75,12 @@ def mqtt_message_consumer():
     except Empty:
         pass
     if updated:
-        # fuerza actualización de la interfaz
+        # Fuerza actualización de la interfaz.
+        # Aquí es razonable reiniciar la UI para reflejar cambios entrantes.
         try:
             st.experimental_rerun()
         except Exception:
+            # si falla, no queremos bloquear la app
             pass
 
 # Publica comandos de luz (matching tu .ino)
@@ -97,7 +99,6 @@ def voice_recognition_component(key="voice"):
     # Carga el HTML y devuelve lo que posteó (obj) o None
     with open("speech_component.html", "r", encoding="utf-8") as f:
         content = f.read()
-    # st.components.v1.html devuelve el objeto enviado por postMessage desde el iframe
     value = html(content, height=160)
     return value
 
@@ -132,12 +133,15 @@ if page == "Luz":
     col1, col2 = st.columns([1, 3])
     with col1:
         if st.button("Activar LED (enviar ON)"):
+            # En lugar de forzar un rerun inmediato, actualizamos el estado local
             publish_light_cmd(client, "on")
-            st.experimental_rerun()
+            st.session_state["light_state"] = "on"   # feedback inmediato
+            st.success("Comando enviado: encender")
     with col2:
         if st.button("Desactivar LED (enviar OFF)"):
             publish_light_cmd(client, "off")
-            st.experimental_rerun()
+            st.session_state["light_state"] = "off"  # feedback inmediato
+            st.success("Comando enviado: apagar")
 
     st.write("---")
     st.write("Reconocimiento de voz (Web Speech API). Pulsa 'Iniciar reconocimiento' en el componente que aparece y habla.")
@@ -148,9 +152,11 @@ if page == "Luz":
         # palabras esperadas en español
         if "encender" in txt:
             publish_light_cmd(client, "on")
+            st.session_state["light_state"] = "on"
             st.success("Comando enviado: encender")
         elif "apagar" in txt:
             publish_light_cmd(client, "off")
+            st.session_state["light_state"] = "off"
             st.success("Comando enviado: apagar")
         else:
             st.warning("No se reconoció 'encender' ni 'apagar' en el texto.")
@@ -209,5 +215,5 @@ st.sidebar.write("- lights/state  (estado retenido de la luz)")
 st.sidebar.write("- temp/telemetry (telemetría DHT)")
 st.sidebar.write("- security/event (PIR)")
 
-# Mantener la app activa y procesando mensajes periódicamente
-# (no bloquear la UI; la función mqtt_message_consumer ya procesa la cola al inicio de cada render)
+# Nota: la función mqtt_message_consumer() se llama al inicio de cada render para
+# procesar mensajes encolados por el hilo MQTT.
