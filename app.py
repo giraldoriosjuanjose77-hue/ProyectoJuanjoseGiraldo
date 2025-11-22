@@ -12,7 +12,7 @@ from mqtt_client import MQTTClient, TOPIC_LIGHTS_CMD, TOPIC_SERVO_CMD
 # -----------------------
 # Interfaz: configurar página primero (requisito Streamlit)
 # -----------------------
-st.set_page_config(page_title="ESP32 — Control y Monitor", layout="wide")
+st.set_page_config(page_title="Control Casa Inteligente", layout="wide")
 
 # -----------------------
 # Visual: background gradient (negro -> dorado) — reglas seguras y limitadas
@@ -359,7 +359,7 @@ def voice_bokeh_button(event_name: str, comp_id: str, label: str = "Iniciar reco
 # -----------------------
 # Sidebar & Main UI
 # -----------------------
-st.title("ESP32 — Interfaz Streamlit (MQTT + Voz)")
+st.title("Control Luces")
 
 # Inicializa y procesa cola MQTT inmediatamente
 client = get_mqtt_client()
