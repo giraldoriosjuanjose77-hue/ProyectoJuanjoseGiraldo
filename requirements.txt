@@ -1,0 +1,5 @@
+streamlit>=1.22
+paho-mqtt>=1.6.1
+numpy>=1.24
+pandas>=2.0
+streamlit-component>=0.1
