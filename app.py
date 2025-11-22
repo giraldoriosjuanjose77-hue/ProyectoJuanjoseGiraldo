@@ -400,7 +400,7 @@ elif page == "Sensores":
     st.header("Temperatura y Humedad (DHT22)")
     st.write("Gráficas en tiempo real (últimos valores recibidos).")
 
-    # Safe auto-refresh: only when tab visible, every 4s
+    # Safe auto-refresh: only when tab visible, every 2s
     result_refresh = html(
         """
         <script>
@@ -412,7 +412,7 @@ elif page == "Sensores":
                 window.parent.postMessage({isStreamlitMessage:true, component:'autorefresh_safe', ts: Date.now()}, "*");
               }
             } catch(e) {}
-          }, 4000);
+          }, 2000);
           window.addEventListener("pagehide", function(){ clearInterval(_afr_interval); });
         }
         </script>
@@ -460,7 +460,7 @@ elif page == "Seguridad":
     st.header("Seguridad / PIR")
     st.write("Cuando el sensor PIR se active (evento 'motion'), esta página cambiará a 'Intruso detectado' automáticamente.")
 
-    # Safe auto-refresh in security: only when tab visible, every 4s
+    # Safe auto-refresh in security: only when tab visible, every 2s
     result_refresh_sec = html(
         """
         <script>
@@ -472,7 +472,7 @@ elif page == "Seguridad":
                 window.parent.postMessage({isStreamlitMessage:true, component:'autorefresh_safe_sec', ts: Date.now()}, "*");
               }
             } catch(e) {}
-          }, 4000);
+          }, 2000);
           window.addEventListener("pagehide", function(){ clearInterval(_afr_interval_sec); });
         }
         </script>
