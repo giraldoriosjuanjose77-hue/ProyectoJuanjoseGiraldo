@@ -13,14 +13,13 @@
     </div>
 
     <script>
-      // Este componente usa la Web Speech API del navegador.
-      // Al obtener un resultado, envía el texto a Streamlit mediante postMessage.
+      
       const startBtn = document.getElementById("startBtn");
       const stopBtn = document.getElementById("stopBtn");
       const status = document.getElementById("status");
       const result = document.getElementById("result");
 
-      // compatibility
+      
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
       if (!SpeechRecognition) {
         status.innerText = "Web Speech API no está disponible en este navegador. Usa Chrome/Edge en escritorio.";
@@ -44,7 +43,7 @@
         recognition.onresult = (ev) => {
           const text = Array.from(ev.results).map(r => r[0].transcript).join('');
           result.innerText = text;
-          // Enviamos el resultado a Streamlit. Streamlit captura postMessage y lo devuelve.
+          
           const payload = { isStreamlitMessage: true, text: text };
           window.parent.postMessage(payload, "*");
         };
@@ -53,7 +52,7 @@
           try {
             recognition.start();
           } catch (e) {
-            // Ignore if start called multiple times
+            
             console.warn(e);
           }
         });
