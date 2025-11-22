@@ -518,6 +518,13 @@ elif page == "Sensores":
     else:
         st.write("No hay datos de temperatura/humedad todavía. Esperando telemetría desde el ESP32.")
 
+    # --- BOTÓN DEL SERVO (RESTAURADO) ---
+    st.write("---")
+    st.write("Control manual del servo desde esta página (al activarlo, moverá el servo a 90°).")
+    if st.button("Activar servo (90°)"):
+        publish_servo_cmd(client, 90)
+        st.success("Comando servo enviado: 90°")
+
 # --- PÁGINA SEGURIDAD ---
 elif page == "Seguridad":
     st.header("Seguridad / PIR")
