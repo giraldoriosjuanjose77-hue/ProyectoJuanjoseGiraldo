@@ -22,6 +22,9 @@ class MQTTClient:
     """
     Simple wrapper around paho-mqtt that publishes/subscribes and pushes parsed messages
     into a Queue for consumption by the Streamlit app.
+
+    NOTE: _on_message places a tuple (topic, parsed_obj_or_None, raw_payload_str) in the queue.
+    This lets the app inspect the raw payload when parsing fails or for debugging.
     """
     def __init__(self, broker=MQTT_BROKER, port=MQTT_PORT, queue: Queue = None):
         self.client = mqtt.Client()
@@ -71,14 +74,16 @@ class MQTTClient:
 
     def _on_message(self, client, userdata, msg):
         topic = msg.topic
-        payload = msg.payload.decode('utf-8', errors='ignore')
+        raw = msg.payload.decode('utf-8', errors='ignore')
         # try parse JSON
+        parsed = None
         try:
-            obj = json.loads(payload)
+            parsed = json.loads(raw)
         except Exception:
-            obj = payload
-        # push to queue
-        self.queue.put((topic, obj))
+            parsed = None
+        # push to queue: (topic, parsed_obj_or_None, raw_payload_str)
+        # The Streamlit app will handle parsing and logging in a robust way.
+        self.queue.put((topic, parsed, raw))
 
     def publish_json(self, topic, payload_dict, retain=False):
         payload = json.dumps(payload_dict)
