@@ -1,3 +1,4 @@
+# app.py
 import json
 import threading
 import time
@@ -35,52 +36,62 @@ def mqtt_message_consumer():
     updated = False
     try:
         while True:
-            # ahora esperamos tupla (topic, parsed_obj_or_None, raw_payload)
-            topic, parsed, raw = q.get_nowait()
+            item = q.get_nowait()
+            # Soportar tanto 2-tuplas (topic, parsed) como 3-tuplas (topic, parsed, raw)
+            if isinstance(item, tuple) and len(item) == 3:
+                topic, parsed, raw = item
+            elif isinstance(item, tuple) and len(item) == 2:
+                topic, parsed = item
+                raw = None
+            else:
+                # formato inesperado: intentar extraer topic/raw
+                try:
+                    topic = item[0]
+                    parsed = item[1] if len(item) > 1 else None
+                    raw = item[2] if len(item) > 2 else None
+                except Exception:
+                    # saltar este item si no podemos entenderlo
+                    continue
+
             # Para depuración, si el topic es lights/state almacenamos el raw
             if topic.endswith("/lights/state"):
-                st.session_state["last_lights_state_raw"] = raw
+                if raw is not None:
+                    st.session_state["last_lights_state_raw"] = raw
+                else:
+                    # si no hay raw, intentar reconstruir del parsed
+                    try:
+                        st.session_state["last_lights_state_raw"] = json.dumps(parsed, ensure_ascii=False)
+                    except Exception:
+                        st.session_state["last_lights_state_raw"] = str(parsed)
 
             # topic checks
             if topic.endswith("/lights/state"):
-                # estado luz
-                # Solo actualizamos si encontramos un campo "power" con "on" o "off"
+                # estado luz: solo actualizar si vemos power="on"|"off"
                 power = None
                 if isinstance(parsed, dict):
-                    # mirar en data.power
                     data = parsed.get("data") or {}
                     if isinstance(data, dict) and "power" in data:
                         power = data.get("power")
-                    # también aceptar payloads con clave directa "power"
-                    if not power and "power" in parsed:
+                    if power is None and "power" in parsed:
                         power = parsed.get("power")
-                    # si el payload tiene { "state": "online" } no tocar el estado de la luz
-                # Si parsed es None (no JSON), intentamos heurística en raw
-                if power is None and isinstance(raw, str):
-                    # intentar buscar '"power":' en el raw con un parseo simple
-                    if '"power"' in raw:
-                        try:
-                            tmp = json.loads(raw)
-                            if isinstance(tmp, dict):
-                                data = tmp.get("data") or {}
-                                if isinstance(data, dict) and "power" in data:
-                                    power = data.get("power")
-                                elif "power" in tmp:
-                                    power = tmp.get("power")
-                        except Exception:
-                            pass
+                # heurística sobre raw si no hubo parsed power
+                if power is None and raw is not None and '"power"' in raw:
+                    try:
+                        tmp = json.loads(raw)
+                        data = tmp.get("data") or {}
+                        if isinstance(data, dict) and "power" in data:
+                            power = data.get("power")
+                        elif "power" in tmp:
+                            power = tmp.get("power")
+                    except Exception:
+                        pass
                 if power is not None:
                     if isinstance(power, str):
                         p = power.lower()
                         if p in ("on", "off"):
                             st.session_state["light_state"] = p
                             updated = True
-                        else:
-                            # valor inesperado -> guardar raw para depuración
-                            st.session_state["last_lights_state_raw"] = raw
-                    else:
-                        # power no es string, ignorar y guardar raw
-                        st.session_state["last_lights_state_raw"] = raw
+                    # si power no es string o no es on/off, lo ignoramos (lo dejamos para depuración)
 
             elif topic.endswith("/temp/telemetry"):
                 if isinstance(parsed, dict):
@@ -92,12 +103,12 @@ def mqtt_message_consumer():
                         st.session_state["timestamps"].append(ts)
                         st.session_state["temps"].append(t)
                         st.session_state["hums"].append(h)
-                        # keep reasonable history
                         max_len = 200
                         st.session_state["timestamps"] = st.session_state["timestamps"][-max_len:]
                         st.session_state["temps"] = st.session_state["temps"][-max_len:]
                         st.session_state["hums"] = st.session_state["hums"][-max_len:]
                         updated = True
+
             elif topic.endswith("/security/event"):
                 if isinstance(parsed, dict):
                     data = parsed.get("data", {})
@@ -105,32 +116,36 @@ def mqtt_message_consumer():
                     if event == "motion":
                         st.session_state["security"] = "Intruso detectado"
                         updated = True
+
             elif topic.endswith("/servo/state"):
-                # manejar confirmaciones del servo si quieres (no obligatorio)
+                # opcional: manejar confirmaciones del servo
                 pass
+
     except Empty:
         pass
+
     if updated:
-        # Fuerza actualización de la interfaz para reflejar cambios entrantes.
+        # Intentamos forzar rerun si la función existe; si no, no fallamos
         try:
-            st.experimental_rerun()
+            # experimental_rerun puede no estar presente en algunos entornos
+            rerun = getattr(st, "experimental_rerun", None)
+            if callable(rerun):
+                rerun()
         except Exception:
+            # no bloqueamos la app si rerun falla
             pass
 
 # Publica comandos de luz (matching tu .ino)
 def publish_light_cmd(client, on_or_off: str):
-    # json: {"cmd":"power","value":"on"/"off"}
     payload = {"cmd": "power", "value": on_or_off}
     client.publish_json(TOPIC_LIGHTS_CMD, payload)
 
 def publish_servo_cmd(client, angle: int):
-    # tu .ino escucha { "angle": <n> } en servo/cmd
     payload = {"angle": angle}
     client.publish_json(TOPIC_SERVO_CMD, payload)
 
 # Componente HTML para reconocimiento de voz
 def voice_recognition_component(key="voice"):
-    # Carga el HTML y devuelve lo que posteó (obj) o None
     with open("speech_component.html", "r", encoding="utf-8") as f:
         content = f.read()
     value = html(content, height=160)
@@ -182,7 +197,6 @@ if page == "Luz":
     if value and isinstance(value, dict) and value.get("text"):
         txt = value.get("text", "").lower()
         st.write("Reconocido:", txt)
-        # palabras esperadas en español
         if "encender" in txt:
             publish_light_cmd(client, "on")
             st.session_state["light_state"] = "on"
@@ -198,5 +212,59 @@ if page == "Luz":
     st.write("Último payload recibido en /lights/state (raw):")
     st.code(st.session_state.get("last_lights_state_raw", "— no recibido —"))
 
-# (El resto de páginas se mantiene igual; no se muestran aquí para brevedad)
-# ... (Sensores y Seguridad como antes)
+elif page == "Sensores":
+    st.header("Temperatura y Humedad (DHT22)")
+    st.write("Gráficas en tiempo real (últimos valores recibidos).")
+    temps = st.session_state.get("temps", [])
+    hums = st.session_state.get("hums", [])
+    timestamps = st.session_state.get("timestamps", [])
+
+    import pandas as pd
+    if timestamps and temps and hums:
+        idx = pd.to_datetime([ts/1000.0 for ts in timestamps], unit='s')
+        df = pd.DataFrame({"temperatura": temps, "humedad": hums}, index=idx)
+        # evitando deprecación: usar width='stretch' en futuras versiones
+        st.line_chart(df["temperatura"], height=250, width='stretch')
+        st.line_chart(df["humedad"], height=250, width='stretch')
+    else:
+        st.write("No hay datos de temperatura/humedad todavía. Esperando telemetría desde el ESP32.")
+
+    st.write("---")
+    st.write("Control manual del servo desde esta página (al activarlo, moverá el servo a 90°).")
+    if st.button("Activar servo (90°)"):
+        publish_servo_cmd(client, 90)
+        st.success("Comando servo enviado: 90°")
+
+elif page == "Seguridad":
+    st.header("Seguridad / PIR")
+    status = st.session_state.get("security", "No se han detectado intrusos")
+    if status == "Intruso detectado":
+        st.error(status)
+    else:
+        st.success(status)
+
+    st.write("Cuando el sensor PIR se active (evento 'motion'), esta página cambiará a 'Intruso detectado' automáticamente.")
+
+    st.write("---")
+    st.write("Comando de voz para seguridad: di 'seguridad' para mover el servo a 110°.")
+    value = voice_recognition_component(key="voice_seguridad")
+    if value and isinstance(value, dict) and value.get("text"):
+        txt = value.get("text", "").lower()
+        st.write("Reconocido:", txt)
+        if "seguridad" in txt:
+            publish_servo_cmd(client, 110)
+            st.success("Comando enviado: mover servo a 110°")
+        else:
+            st.warning("No se reconoció la palabra 'seguridad' en el texto.")
+
+# Footer / información de conexión MQTT
+st.sidebar.write("MQTT broker:")
+st.sidebar.write(f"{client.broker}:{client.port}")
+st.sidebar.write("Último client id (si disponible):")
+try:
+    cid = client.client._client_id.decode() if hasattr(client.client, '_client_id') else ""
+except Exception:
+    cid = ""
+st.sidebar.write(cid)
+st.sidebar.write("Último payload /lights/state (raw):")
+st.sidebar.write(st.session_state.get("last_lights_state_raw", "— no recibido —"))
