@@ -9,15 +9,10 @@ from streamlit.components.v1 import html
 
 from mqtt_client import MQTTClient, TOPIC_LIGHTS_CMD, TOPIC_SERVO_CMD
 
-# -----------------------
-# Interfaz: configurar página primero (requisito Streamlit)
-# -----------------------
+
 st.set_page_config(page_title="Control Casa Inteligente", layout="wide")
 
-# -----------------------
-# Visual: background gradient (negro -> dorado) — reglas seguras y limitadas
-# Inserta CSS después de set_page_config para evitar problemas.
-# -----------------------
+
 st.markdown(
     """
     <style>
@@ -92,30 +87,26 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# -----------------------
-# Helper para inicializar MQTT (singleton dentro de Streamlit)
-# -----------------------
+
 def get_mqtt_client():
     if "mqtt_client" not in st.session_state:
         st.session_state["mqtt_queue"] = Queue()
         client = MQTTClient(queue=st.session_state["mqtt_queue"])
         client.start()
         st.session_state["mqtt_client"] = client
-        # estados iniciales
+       
         st.session_state.setdefault("light_state", "unknown")
-        st.session_state.setdefault("temps", [])   # lista de valores de temperatura
-        st.session_state.setdefault("hums", [])    # lista de valores de humedad
-        st.session_state.setdefault("timestamps", [])  # lista de timestamps (ms)
+        st.session_state.setdefault("temps", [])   
+        st.session_state.setdefault("hums", [])    
+        st.session_state.setdefault("timestamps", [])  
         st.session_state.setdefault("security", "No se han detectado intrusos")
-        # para depuración: último payload RAW recibido en /lights/state
+        
         st.session_state.setdefault("last_lights_state_raw", None)
-        # último timestamp (ms) de evento PIR 'motion'
+        
         st.session_state.setdefault("last_motion_ts", None)
     return st.session_state["mqtt_client"]
 
-# -----------------------
-# Consumo robusto de la cola MQTT
-# -----------------------
+
 def mqtt_message_consumer():
     """
     Procesa todos los mensajes en la cola MQTT (st.session_state['mqtt_queue'])
@@ -129,7 +120,7 @@ def mqtt_message_consumer():
     try:
         while True:
             item = q.get_nowait()
-            # Soportar tanto 2-tuplas (topic, parsed) como 3-tuplas (topic, parsed, raw)
+            
             topic = None
             parsed = None
             raw = None
@@ -145,12 +136,12 @@ def mqtt_message_consumer():
                         parsed = item[1] if len(item) > 1 else None
                         raw = item[2] if len(item) > 2 else None
                 elif isinstance(item, dict):
-                    # fallback: attempt to extract keys
+                    
                     topic = item.get("topic")
                     parsed = item.get("parsed")
                     raw = item.get("raw")
                 else:
-                    # unknown format, try to index
+                    
                     try:
                         topic = item[0]
                         parsed = item[1] if len(item) > 1 else None
@@ -163,7 +154,7 @@ def mqtt_message_consumer():
             if not topic:
                 continue
 
-            # Para depuración, si el topic es lights/state almacenamos el raw
+            
             if topic.endswith("/lights/state"):
                 if raw is not None:
                     st.session_state["last_lights_state_raw"] = raw
@@ -173,7 +164,7 @@ def mqtt_message_consumer():
                     except Exception:
                         st.session_state["last_lights_state_raw"] = str(parsed)
 
-            # Lógica por topic
+            
             if topic.endswith("/lights/state"):
                 power = None
                 if isinstance(parsed, dict):
@@ -199,13 +190,13 @@ def mqtt_message_consumer():
                         updated = True
 
             elif topic.endswith("/temp/telemetry"):
-                # Telemetría DHT22: t/h
+                
                 if isinstance(parsed, dict):
                     ts = parsed.get("ts", int(time.time()*1000))
                     data = parsed.get("data", {}) or {}
                     t = data.get("temp")
                     h = data.get("hum")
-                    # tolerancia a formatos distintos
+                    
                     if t is None and isinstance(parsed.get("data"), dict):
                         t = parsed.get("data").get("temp")
                     if h is None and isinstance(parsed.get("data"), dict):
@@ -247,7 +238,7 @@ def mqtt_message_consumer():
                             pass
 
             elif topic.endswith("/security/event"):
-                # parsing tolerante para 'motion'
+                
                 got_motion = False
                 if isinstance(parsed, dict):
                     data = parsed.get("data") or {}
@@ -261,31 +252,30 @@ def mqtt_message_consumer():
                     got_motion = True
                 if got_motion:
                     st.session_state["security"] = "Intruso detectado"
-                    # almacenar la hora del último evento motion en milisegundos
+                    
                     st.session_state["last_motion_ts"] = int(time.time() * 1000)
                     updated = True
 
             elif topic.endswith("/servo/state"):
-                # opcional: manejar confirmaciones del servo si necesitas
+                
                 pass
 
     except Empty:
         pass
 
     if updated:
-        # Forzar rerun seguro: solo usar experimental_rerun si existe
+        
         try:
             rerun = getattr(st, "experimental_rerun", None)
             if callable(rerun):
                 rerun()
             else:
-                # Evitar usar st.experimental_set_query_params (obsoleta) repetidamente
-                # No forzamos rerun mediante query params para reducir log spam.
+               
                 pass
         except Exception:
             pass
 
-# Publica comandos de luz / servo
+
 def publish_light_cmd(client, on_or_off: str):
     payload = {"cmd": "power", "value": on_or_off}
     client.publish_json(TOPIC_LIGHTS_CMD, payload)
@@ -294,9 +284,7 @@ def publish_servo_cmd(client, angle: int):
     payload = {"angle": angle}
     client.publish_json(TOPIC_SERVO_CMD, payload)
 
-# -----------------------
-# Voice (Bokeh) helper - RESTAURADO
-# -----------------------
+
 def voice_bokeh_button(event_name: str, comp_id: str, label: str = "Iniciar reconocimiento"):
     js = f"""
     if (!window.speechRecognitionInstances) {{
